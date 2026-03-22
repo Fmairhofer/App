@@ -30,7 +30,7 @@ db = client[os.environ['DB_NAME']]
 JWT_SECRET = os.environ.get('JWT_SECRET', 'fallback-secret')
 JWT_ALGORITHM = "HS256"
 JWT_EXPIRY_DAYS = 7
-EMERGENT_LLM_KEY = os.environ.get('EMERGENT_LLM_KEY', '')
+OPENAI_API_KEY = os.environ.get('OPENAI_API_KEY', '')
 
 executor = ThreadPoolExecutor(max_workers=4)
 
@@ -611,11 +611,9 @@ async def get_backtest(backtest_id: str, user=Depends(auth_dependency)):
 
 @api_router.post("/ai/suggest")
 async def ai_suggest_strategy(input: AiPromptInput, user=Depends(auth_dependency)):
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"suggest-{user['id']}-{uuid.uuid4()}",
-        system_message="""You are an expert quantitative trading strategy developer. 
+    from openai import AsyncOpenAI
+    openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    system_message = """You are an expert quantitative trading strategy developer. 
 When asked to create a trading strategy, generate Python code that follows this interface:
 
 def init(context):
@@ -637,10 +635,14 @@ def handle_data(context, data):
 Always provide complete, working Python code with comments explaining the logic.
 Only use the available indicators: sma_5, sma_10, sma_20, sma_50, ema_12, ema_26, rsi_14.
 Keep strategies simple and practical."""
-    ).with_model("openai", "gpt-5.2")
-
-    user_msg = UserMessage(text=input.prompt)
-    response = await chat.send_message(user_msg)
+    completion = await openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": input.prompt},
+        ],
+    )
+    response = completion.choices[0].message.content
     return {"response": response, "type": "suggestion"}
 
 @api_router.post("/ai/analyze/{backtest_id}")
@@ -658,18 +660,15 @@ async def ai_analyze_backtest(backtest_id: str, user=Depends(auth_dependency)):
 
     metrics = backtest.get("metrics", {})
 
-    from emergentintegrations.llm.chat import LlmChat, UserMessage
-    chat = LlmChat(
-        api_key=EMERGENT_LLM_KEY,
-        session_id=f"analyze-{user['id']}-{uuid.uuid4()}",
-        system_message="""You are an expert trading analyst. Analyze backtest results and provide:
+    from openai import AsyncOpenAI
+    openai_client = AsyncOpenAI(api_key=OPENAI_API_KEY)
+    system_message = """You are an expert trading analyst. Analyze backtest results and provide:
 1. Performance summary
 2. Strengths and weaknesses
 3. Risk assessment  
 4. Specific improvement suggestions
 5. Market condition suitability
 Be concise but insightful. Use data to support your analysis."""
-    ).with_model("openai", "gpt-5.2")
 
     prompt = f"""Analyze this backtest result:
 
@@ -695,8 +694,14 @@ Metrics:
 Strategy Code:
 {strategy_code}"""
 
-    user_msg = UserMessage(text=prompt)
-    response = await chat.send_message(user_msg)
+    completion = await openai_client.chat.completions.create(
+        model="gpt-4o",
+        messages=[
+            {"role": "system", "content": system_message},
+            {"role": "user", "content": prompt},
+        ],
+    )
+    response = completion.choices[0].message.content
     return {"response": response, "type": "analysis", "backtest_id": backtest_id}
 
 # ===== SEED DATA =====
